@@ -1,0 +1,111 @@
+---
+title: "Predictive Model for Physical Activity"
+author: "Patrick Hyland"
+date: "March 23, 2017"
+output: html_document
+---
+# Executive Summary:
+The purpose of this markdown is to describe the analysis conducted on the 
+the activity type given data on movement. Models used after data cleaning were decision tree,
+random
+forest, gradient boosted model, and finally a linear discriminant analysis combining the two
+aforementioned predictors. The final model created brings 99.4% accuracy for
+predicting class types "A","B","C","D", and "E".
+
+## Data clean-up/Model Building
+After reading in the data and determing the varying categorical outcomes, I had to load
+the required packages that would allow for easier data manipulation and machine learning.
+First, looking at the data I noticed columns that contained any NA values meant that when they
+had values, it was only for a select number of records. Including these columns would skew the
+variable importance since it is not representative of most of the other data.
+
+```{r,results='hide',cache=TRUE}
+setwd("C:/Users/phyland/Desktop/RWorkingDirectory")
+
+data <- read.csv("pml-training.csv")
+library(caret)
+library(rattle)
+library(ggplot2)
+library(randomForest)
+for (i in 1:length(data)){
+  if (TRUE %in% is.na(data[,i])){
+    names(data)[i] <- 'DROP'
+  }
+}
+```
+
+From that point, I had to drop colums that I had marked. In addition, I dropped records for new time
+windows to hold the variables constant for predicting class and because there are few records of new
+windows.  Also, since the overarching problem is not time relating, I deleted variables pertaining
+to dates time, and users.
+
+To further asses which variables to eliminate, I conducted a zero variance analysis and cut out the 
+ones whose variance was near 0. 
+```{r}
+library(data.table)
+data<- as.data.table(data)
+data<- data[,-('DROP')]
+data<- data[data$new_window == 'no',]
+data <- data[,-('user_name')]
+
+library(caret)
+n<- nearZeroVar(data,saveMetrics = T)
+drop<- n[n$zeroVar==TRUE,]
+data2<- data[,-c(rownames(drop)),with=F]
+data2<- data2[,-('cvtd_timestamp')]
+data2<- data2[,5:ncol(data2)]
+```
+
+To speed up run time, I set the cross validataion of data to be 60% training and 40% test, versus a
+80/20 split which would slow down the analysis when building my model. The training and test were
+set at random, with the seed set at 567 for reproducibility.
+```{r}
+set.seed(567)
+inTrain <- createDataPartition(y=data2$classe,p=.6,list = FALSE)
+training <- data2[inTrain,]
+testing<- data2[-inTrain,]
+```
+
+The first model is a simple decision tree. It was very interpretable, but yielded a poor accuracy. 
+Therefore, when predicting out of sample error rate, that would also be very low. Probably greater
+than 50%. An accuracy this low, even for 5 outcomes is not acceptable.
+
+Looking at how this model rated variable importance, you can see that when plotting the top 2 most 
+important varibles under this model, it is still fairly difficult to differentiate class. This further proves that this model is not the best fit.
+```{r,cache=TRUE}
+dtfit <- train(classe~., data=training, method='rpart')
+
+fancyRpartPlot(dtfit$finalModel,main='Decision Tree',cex=.7)
+vi<-varImp(dtfit)
+vi
+
+qplot(pitch_forearm,roll_forearm,color=classe,data=training)
+confusionMatrix(testing$classe,predict(dtfit,testing))
+```
+
+The next two models attempted were gradient boosted model and a random forest. These models are 
+traditionally much more accurate and are well suited for outcome classes. 
+Looking at results, both were exceptional with 97% and 99%, respectively. An out of sample error
+rate should be similarly great since no overfitting was attempted.
+```{r,cache=TRUE}
+gbmfit <- train(classe~.,method='gbm',data=training,verbose=FALSE)
+gbmfit$finalModel
+confusionMatrix(testing$classe,predict(gbmfit,testing))
+
+rffit <- randomForest(classe~.,data=training,prox=TRUE)
+confusionMatrix(testing$classe,predict(rffit,testing))
+```
+
+To see if I could get even better results, I combined these two predictors using linear
+discriminant analysis. This capitalizes off the strongest accuracies in each model to attempt to
+bring the greatest amount of accuracy in the final result.
+```{r,cache=TRUE}
+rfpred<- predict(rffit,testing)
+gbmpred <- predict(gbmfit,testing)
+newdf <- data.frame(rfpred,gbmpred,classe=testing$classe)
+combined<- train(classe~.,data=newdf,method='lda')
+finpred <- predict(combined,newdf$classe)
+confusionMatrix(testing$classe,finpred)
+```
+The results were identical to that of the random forest. But in case future inputs are extreme, 
+this combined model should be able to handle both.
